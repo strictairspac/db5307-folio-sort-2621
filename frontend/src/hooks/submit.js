@@ -3,7 +3,7 @@ export function submit(id, action, fail, done=()=>{}) {
     event.preventDefault();
     const button = event.submitter;
     if (button) button.disabled = true;
-    try { await action(new FormData(event.currentTarget)); done(); }
+    try { await action(new FormData(event.currentTarget, event.submitter)); done(); }
     catch (error) { fail(error); }
     finally { if (button) button.disabled = false; }
   });

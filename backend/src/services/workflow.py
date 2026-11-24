@@ -6,7 +6,7 @@ from sqlalchemy import and_, or_, select
 
 from src.config.settings import cache, engine
 from src.constants.workflow import Status
-from src.models.tables import audit, cases, evidence, runs
+from src.models.tables import audit, cases, evidence, intakes, runs
 from src.services import domain
 from src.utils.encoding import canonical
 from src.utils.time import utc_time
@@ -42,6 +42,10 @@ def make_case(title, payload, actor):
     with engine.begin() as conn:
         case_id = conn.execute(cases.insert().values(slug=uuid.uuid4().hex, title=title, payload=payload,
                                author=actor, created_at=utc_time())).inserted_primary_key[0]
+        total_rows = domain.intake_rows(payload)
+        if total_rows is not None:
+            conn.execute(intakes.insert().values(case_id=case_id, total_rows=total_rows,
+                         received_rows=0, created_at=utc_time()))
         log(conn, actor, 'create_case', case_id)
         return found(conn, cases, case_id)
 
@@ -49,6 +53,11 @@ def make_case(title, payload, actor):
 def enqueue(case_id, actor):
     with engine.begin() as conn:
         found(conn, cases, case_id)
+        register = conn.execute(select(intakes).where(intakes.c.case_id == case_id)).mappings().first()
+        if register is not None:
+            if register['sealed_at'] is None:
+                raise HTTPException(409, '分段清册尚未收齐封单，不能排队')
+            return found(conn, runs, register['run_id'])
         run_id = conn.execute(runs.insert().values(case_id=case_id, status=Status.QUEUED,
                               owner=actor, created_at=utc_time())).inserted_primary_key[0]
         log(conn, actor, 'enqueue', run_id)
@@ -73,7 +82,7 @@ def claim():
         token = str(uuid.uuid4())
         conn.execute(runs.update().where(runs.c.id == run.id).values(
             started_at=utc_time(), status=Status.RUNNING, attempt_token=token))
-        return run.id, token, found(conn, cases, run.case_id)['payload']
+        return run.id, token, run.case_id, found(conn, cases, run.case_id)['payload']
 
 
 def finish(run_id, token, result=None, error=None):

@@ -15,3 +15,13 @@ class CaseForm(BaseModel):
 
 class ReviewForm(BaseModel):
     note: str = Field(min_length=1, max_length=500)
+
+
+class ChunkForm(BaseModel):
+    start: int = Field(ge=1)
+    records: list[Any] = Field(min_length=1)
+
+
+class SealForm(BaseModel):
+    start: int | None = Field(default=None, ge=1)
+    records: list[Any] | None = Field(default=None, min_length=1)

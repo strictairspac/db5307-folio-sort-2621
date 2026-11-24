@@ -7,6 +7,7 @@ import {casesPage} from './pages/cases.js';
 import {bindEditor, editorPage} from './pages/editor.js';
 import {runsPage} from './pages/runs.js';
 import {bindEvidence, evidencePage} from './pages/evidence.js';
+import {bindIntake, intakePage} from './pages/intake.js';
 import {go, route} from './router/hash.js';
 import {submit} from './hooks/submit.js';
 import {esc} from './utils/dom.js';
@@ -21,7 +22,7 @@ function fail(error) {
   if (message) { message.textContent=error.message; message.className='error'; }
 }
 const api = (path, options={})=>request(path, {...options, token:state.session?.token});
-const pages = {cases:casesPage, editor:editorPage, runs:runsPage, evidence:evidencePage};
+const pages = {cases:casesPage, editor:editorPage, runs:runsPage, evidence:evidencePage, intake:intakePage};
 async function refresh() {
   clearTimeout(timer);
   const key = ++revision;
@@ -47,13 +48,14 @@ async function refresh() {
     fail(error);
     return;
   }
-  const navigation = Object.keys(pages).map((x,index)=>x==='editor'&&state.session.role!=='operator' ? ''
+  const navigation = Object.keys(pages).map((x,index)=>x==='intake'||(x==='editor'&&state.session.role!=='operator') ? ''
     : `<a href="#${x}" ${x===page?'aria-current="page"':''}>${esc(topic.modules[index])}</a>`).join('');
   app.innerHTML=`<header class="masthead"><a class="identity" href="#cases">${esc(topic.name)}</a><div class="user"><span>${esc(roleLabels[state.session.role])}</span><button id="logout" class="secondary">退出</button></div></header>
     <div class="workspace"><nav aria-label="业务模块">${navigation}</nav><main><div id="message" role="alert"></div>${pages[page](state,id)}</main></div>`;
   document.getElementById('logout').addEventListener('click',()=>{setSession(null); void refresh();});
   if (page==='editor') bindEditor(state, api, fail);
   if (page==='evidence') bindEvidence(api, refresh, fail);
+  if (page==='intake') bindIntake(state, api, id, fail);
   if (page==='runs') {
     document.getElementById('refresh').addEventListener('click', refresh);
     if (state.runs.some(row=>['queued','running'].includes(row.status))) timer=setTimeout(refresh,1000);

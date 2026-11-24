@@ -1,11 +1,11 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy import text
 
 from src.config.settings import cache, engine
 from src.controllers.workflow import download
 from src.models.tables import audit, cases, evidence, runs
-from src.schemas.workflow import CaseForm, LoginForm, ReviewForm
-from src.services import domain, workflow
+from src.schemas.workflow import CaseForm, ChunkForm, LoginForm, ReviewForm, SealForm
+from src.services import domain, intake, workflow
 from src.services.security import current_user, login, operator, reviewer
 
 router = APIRouter()
@@ -47,6 +47,24 @@ def list_runs(_=Depends(current_user)):
 @router.post('/cases/{case_id}/runs', status_code=202)
 def start_run(case_id: int, actor=Depends(operator)):
     return workflow.enqueue(case_id, actor)
+
+
+@router.get('/cases/{case_id}/intake')
+def intake_progress(case_id: int, _=Depends(current_user)):
+    return intake.progress(case_id)
+
+
+@router.post('/cases/{case_id}/chunks')
+def submit_chunk(case_id: int, form: ChunkForm, response: Response, actor=Depends(operator)):
+    body, created = intake.add_chunk(case_id, form.start, form.records, actor)
+    if created:
+        response.status_code = 201
+    return body
+
+
+@router.post('/cases/{case_id}/seal')
+def seal_case(case_id: int, form: SealForm | None = None, actor=Depends(operator)):
+    return intake.seal(case_id, form.start if form else None, form.records if form else None, actor)
 
 
 @router.get('/evidence')

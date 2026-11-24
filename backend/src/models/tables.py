@@ -1,5 +1,5 @@
 from sqlalchemy import (JSON, Column, ForeignKey, Integer, MetaData, String,
-                        Table, Text)
+                        Table, Text, UniqueConstraint)
 
 schema = MetaData()
 users = Table('accounts', schema,
@@ -32,6 +32,22 @@ evidence = Table('business_evidence', schema,
     Column('reviewer', String(40)),
     Column('review_note', String(500)),
     Column('reviewed_at', String(32)))
+intakes = Table('case_intake', schema,
+    Column('case_id', ForeignKey('business_cases.id'), primary_key=True),
+    Column('total_rows', Integer, nullable=False),
+    Column('received_rows', Integer, nullable=False),
+    Column('sealed_at', String(32)),
+    Column('run_id', ForeignKey('business_runs.id')),
+    Column('created_at', String(32), nullable=False))
+chunks = Table('case_chunks', schema,
+    Column('id', Integer, primary_key=True),
+    Column('case_id', ForeignKey('business_cases.id'), nullable=False, index=True),
+    Column('start_row', Integer, nullable=False),
+    Column('row_count', Integer, nullable=False),
+    Column('digest', String(64), nullable=False),
+    Column('records', JSON, nullable=False),
+    Column('created_at', String(32), nullable=False),
+    UniqueConstraint('case_id', 'start_row', name='uq_case_chunks_start'))
 audit = Table('audit_events', schema,
     Column('id', Integer, primary_key=True),
     Column('actor', String(40), nullable=False),

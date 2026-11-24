@@ -18,6 +18,7 @@ SPEC = {
         "run_bytes": "初始段内存预算（字节）",
         "fan_in": "每组最多归并段数",
         "records": "交接清册",
+        "total_rows": "登记总行数",
         "item_id": "馆藏件号",
         "accession_no": "馆藏登录号",
         "title": "题名",
@@ -25,6 +26,7 @@ SPEC = {
     "guidance": (
         "按交接清册原顺序录入馆藏件。登录号形如 GJ-2026-2 或 GJ-2026-2-1，"
         "按馆藏代码、年份、流水号和分册号排序。初始段预算按 UTF-8 字节计，归并上限为 2 至 32 段。"
+        "清册过大时可先登记总行数，再分段交册，收齐封单后排队整理。"
     ),
     "sample": {
         "batch_no": "WX-20261121-AM",
@@ -41,6 +43,12 @@ SPEC = {
             {"item_id": "BX-08", "accession_no": "GJ-2026-002-2", "title": "海盐县志续卷副本"},
             {"item_id": "BX-09", "accession_no": "GJ-2026-1", "title": "江口纪行"},
         ],
+    },
+    "intake_sample": {
+        "batch_no": "WX-20261121-AM",
+        "run_bytes": 110,
+        "fan_in": 2,
+        "total_rows": 9,
     },
     "expect": {
         "上架件数": 9,
@@ -73,7 +81,7 @@ def _read_text(value: object, label: str) -> str:
     return value
 
 
-def _batch_inputs(payload: object) -> tuple[str, int, int, list]:
+def _batch_inputs(payload: object) -> tuple[str, int, int, list | None, int | None]:
     if not isinstance(payload, dict):
         raise ValueError("登录批次必须是对象")
     batch_no = _read_text(payload.get("batch_no"), "登录批次号")
@@ -88,13 +96,20 @@ def _batch_inputs(payload: object) -> tuple[str, int, int, list]:
     if type(fan_in) is not int or not 2 <= fan_in <= 32:
         raise ValueError("每组最多归并段数必须是 2 至 32 之间的整数")
     records = payload.get("records")
-    if not isinstance(records, list):
+    total_rows = payload.get("total_rows")
+    if records is None and total_rows is None:
+        raise ValueError("请提供交接清册记录数组，或登记总行数后分段交册")
+    if records is not None and total_rows is not None:
+        raise ValueError("交接清册与登记总行数只能二选一")
+    if records is not None and not isinstance(records, list):
         raise ValueError("交接清册必须是记录数组")
-    return batch_no, run_bytes, fan_in, records
+    if total_rows is not None and (type(total_rows) is not int or total_rows < 1):
+        raise ValueError("登记总行数必须是正整数")
+    return batch_no, run_bytes, fan_in, records, total_rows
 
 
-def _entries(records: list, run_bytes: int) -> Iterator[Entry]:
-    for position, record in enumerate(records, start=1):
+def _entries(indexed_records, run_bytes: int) -> Iterator[Entry]:
+    for position, record in indexed_records:
         if not isinstance(record, dict):
             raise ValueError(f"第 {position} 行馆藏记录必须是对象")
         item_id = _read_text(record.get("item_id"), f"第 {position} 行馆藏件号")
@@ -131,20 +146,57 @@ def _row_from_line(rank: int, line: bytes) -> dict[str, str | int]:
 
 
 def validate(payload):
-    _, run_bytes, _, records = _batch_inputs(payload)
-    for _ in _entries(records, run_bytes):
+    _, run_bytes, _, records, _ = _batch_inputs(payload)
+    if records is None:
+        return
+    for _ in _entries(enumerate(records, start=1), run_bytes):
         pass
 
 
-def solve(payload, engine):
-    batch_no, run_bytes, fan_in, records = _batch_inputs(payload)
+def validate_rows(run_bytes: int, start: int, records: list):
+    """校验分段清册，行级错误带原登记行号（从 start 起算）。"""
+    for _ in _entries(enumerate(records, start=start), run_bytes):
+        pass
+
+
+def intake_rows(payload):
+    """分段交册档案的登记总行数；整册档案返回 None。"""
+    if isinstance(payload, dict) and payload.get("records") is None:
+        total_rows = payload.get("total_rows")
+        if type(total_rows) is int and total_rows >= 1:
+            return total_rows
+    return None
+
+
+def solve(payload, engine, case_id=None):
+    batch_no, run_bytes, fan_in, records, total_rows = _batch_inputs(payload)
+    if records is not None:
+        indexed = enumerate(records, start=1)
+        expected = None
+    else:
+        if case_id is None:
+            raise ValueError("分段清册缺少档案编号，无法读取收件")
+        # 延迟导入，让本模块不依赖数据库层即可测试。
+        from .chunk_feed import stored_records
+        indexed = stored_records(engine, case_id)
+        expected = total_rows
+    seen = 0
+
+    def counted():
+        nonlocal seen
+        for item in indexed:
+            seen += 1
+            yield item
+
     order, phases = sort_on_disk(
-        _entries(records, run_bytes),
+        _entries(counted(), run_bytes),
         run_bytes=run_bytes,
         fan_in=fan_in,
         key_from_line=_key_from_line,
         row_from_line=_row_from_line,
     )
+    if expected is not None and seen != expected:
+        raise ValueError(f"清册登记 {expected} 行，实际收件 {seen} 行")
     metrics = {
         "上架件数": len(order),
         "初始磁盘段数": phases[0].output_runs,
